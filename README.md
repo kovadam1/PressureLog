@@ -1,28 +1,39 @@
-# Vérnyomás App (Spec v3 alapján)
+# PressureLog (Vérnyomás napló)
 
-## Indítás
+## Gyors telepítés (Git-ből, szűz indulás)
 
-1. Másold a környezeti fájlt:
+```bash
+git clone git@github.com:kovadam1/PressureLog.git
+cd PressureLog
+./install.sh --reset
+```
+
+- `--reset`: tiszta indulás (régi volume/adat törlése)
+- reset nélkül: `./install.sh` (adatok megmaradnak)
+
+## Kézi indítás
+
+1. Környezeti fájl létrehozása:
    ```bash
    cp .env.example .env
    ```
-2. Indítsd a stack-et:
+2. Stack indítása:
    ```bash
-   docker compose up --build
+   docker compose up -d --build
    ```
-3. Elérés:
-   - Frontend: http://localhost:5173
-   - Backend: http://localhost:4000
 
-## Mit tud most (MVP)
-- Regisztráció + belépés (PIN hash)
-- User/Admin szerepkör
-- Mérés felvitel (sys/dia/pulse, napszak, kontextus, tünet szöveg, napi sorszám)
-- Figyelmeztetés magas/veszélyes értéknél
-- Grafikon referencia vonalakkal (140/90)
-- Trend/átlag/min/max stat
-- CSV export
-- Admin: user lista + rendszer stat + report kérés rekord
+## Elérés
+- Frontend: http://localhost:5173
+- Backend health: http://localhost:4000/health
+
+## Funkciók (jelenlegi)
+- Regisztráció + belépés (**jelszóval**)
+- Admin és user szerepkör
+- Vérnyomás/pulzus mérés rögzítés
+- Tünetek + megjegyzés
+- Statisztikák és trend grafikon
+- PDF/CSV export
+- Admin panel: felhasználók + rendszer stat + riportkérés
 
 ## Fontos
 Ez nem orvosi diagnosztikai rendszer, csak naplózó/összegző alkalmazás.
