@@ -16,6 +16,15 @@ app.use(express.json());
 const symptomDefaults = ["szedules", "fejfajas", "szivdobogas", "mellkasi nyomas", "legszomj"];
 
 async function ensureSchema() {
+await pool.query(`
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(80) UNIQUE NOT NULL,
+  pin_hash TEXT NOT NULL,
+  role VARCHAR(10) NOT NULL DEFAULT 'user',
+  timezone VARCHAR(80) DEFAULT 'Europe/Budapest',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+)`);
 await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(160)`);
 await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date DATE`);
 }
