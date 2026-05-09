@@ -1,6 +1,59 @@
 # PressureLog (Vérnyomás napló)
 
-## Gyors telepítés (Git-ből, szűz indulás)
+## Tiszta telepítés lépésről lépésre (Windows CMD)
+
+> Ajánlott útvonal: `I:\vernyomas\PressureLog`
+
+### 0) Előfeltételek
+- Docker Desktop fut
+- Git telepítve van
+
+### 1) Projekt klónozása
+```cmd
+cd /d I:\vernyomas
+git clone https://github.com/kovadam1/PressureLog.git
+cd PressureLog
+```
+
+### 2) Környezeti fájl létrehozása
+```cmd
+copy .env.example .env
+```
+
+### 3) Konténerek build + indítás
+```cmd
+docker compose up -d --build
+```
+
+### 4) Ellenőrzés
+```cmd
+docker compose ps
+curl http://localhost:4000/health
+```
+Várt válasz:
+```json
+{"ok":true}
+```
+
+### 5) Használat
+- Frontend: http://localhost:5173
+- Alternatíva: http://127.0.0.1:5173
+
+---
+
+## Tiszta újratelepítés (ha valami nagyon elcsúszott)
+
+```cmd
+cd /d I:\vernyomas
+docker compose -f PressureLog\docker-compose.yml down -v --remove-orphans
+rmdir /s /q PressureLog
+git clone https://github.com/kovadam1/PressureLog.git
+cd PressureLog
+copy .env.example .env
+docker compose up -d --build
+```
+
+## Linux gyors telepítés (opcionális)
 
 ```bash
 git clone git@github.com:kovadam1/PressureLog.git
@@ -10,17 +63,6 @@ cd PressureLog
 
 - `--reset`: tiszta indulás (régi volume/adat törlése)
 - reset nélkül: `./install.sh` (adatok megmaradnak)
-
-## Kézi indítás
-
-1. Környezeti fájl létrehozása:
-   ```bash
-   cp .env.example .env
-   ```
-2. Stack indítása:
-   ```bash
-   docker compose up -d --build
-   ```
 
 ## Elérés
 - Frontend: http://localhost:5173 *(vagy http://127.0.0.1:5173)*
