@@ -23,8 +23,27 @@ cd PressureLog
    ```
 
 ## Elérés
-- Frontend: http://localhost:5173
+- Frontend: http://localhost:5173 *(vagy http://127.0.0.1:5173)*
 - Backend health: http://localhost:4000/health
+
+## Gyors hibaelhárítás (regisztráció/belépés sikertelen)
+1. Ellenőrizd a backendet:
+   ```bash
+   curl http://localhost:4000/health
+   ```
+   Várt válasz: `{"ok":true}`
+
+2. CORS ellenőrzés (`.env`):
+   ```env
+   CORS_ORIGIN=http://localhost:5173,http://127.0.0.1:5173
+   ```
+
+3. Backend újraépítés CORS módosítás után:
+   ```bash
+   docker compose up -d --build backend
+   ```
+
+4. Böngészőben hard refresh: `Ctrl+F5`
 
 ## Funkciók (jelenlegi)
 - Regisztráció + belépés (**jelszóval**)
