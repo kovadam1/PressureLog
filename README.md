@@ -41,6 +41,18 @@ Várt válasz:
 
 ---
 
+## Tiszta törlés (full reset)
+
+> Figyelem: ez törli a projekt mappát és a kapcsolódó konténer/volume adatokat is.
+
+```cmd
+cd /d I:\vernyomas
+docker compose -f PressureLog\docker-compose.yml down -v --remove-orphans 2>nul
+docker ps -a --filter "name=pressurelog" -q | for /f %i in ('more') do docker rm -f %i
+docker volume ls --format "{{.Name}}" | findstr /i pressurelog | for /f %i in ('more') do docker volume rm %i
+rmdir /s /q PressureLog
+```
+
 ## Tiszta újratelepítés (ha valami nagyon elcsúszott)
 
 ```cmd
