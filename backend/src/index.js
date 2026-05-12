@@ -1,8 +1,10 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
 import { stringify } from "csv-stringify/sync";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import pool from "./db.js";
@@ -10,10 +12,20 @@ import { authRequired, adminOnly } from "./auth.js";
 
 dotenv.config();
 const app = express();
+app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN?.split(",") || "*" }));
 app.use(express.json());
 
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Túl sok bejelentkezési próbálkozás. Kérlek várj 15 percet." },
+});
+
 const symptomDefaults = ["szedules", "fejfajas", "szivdobogas", "mellkasi nyomas", "legszomj"];
+const isNonEmptyString = (v, max = 255) => typeof v === 'string' && v.trim().length > 0 && v.trim().length <= max;
 
 async function ensureSchema() {
 await pool.query(`
@@ -27,37 +39,64 @@ CREATE TABLE IF NOT EXISTS users (
 )`);
 await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(160)`);
 await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date DATE`);
+await pool.query(`
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+  id SERIAL PRIMARY KEY,
+  user_name VARCHAR(80) NOT NULL,
+  note TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'requested',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+)`);
 }
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, async (req, res) => {
 const { name, password, full_name, birth_date } = req.body;
-if (!name || !password) return res.status(400).json({ error: 'Név és jelszó kötelező' });
+if (!isNonEmptyString(name, 80) || !isNonEmptyString(password, 200)) {
+  return res.status(400).json({ error: 'Név és jelszó kötelező' });
+}
 if (String(password).length < 6) return res.status(400).json({ error: 'A jelszó legalább 6 karakter legyen' });
 const pinHash = await bcrypt.hash(password, 10);
 const safeRole = 'user';
 try {
 const q = await pool.query(
 'INSERT INTO users(name, pin_hash, role, full_name, birth_date) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,role,full_name,birth_date',
-[name, pinHash, safeRole, full_name || null, birth_date || null]
+[name.trim(), pinHash, safeRole, full_name || null, birth_date || null]
 );
 res.json(q.rows[0]);
 } catch (e) {
 if (e?.code === '23505') return res.status(409).json({ error: 'Ez a felhasználónév már foglalt' });
-res.status(400).json({ error: 'Hibás adat', detail: e.message });
+console.error('Register error:', e);
+res.status(400).json({ error: 'Hibás adat' });
 }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
 const { name, password } = req.body;
-const q = await pool.query('SELECT * FROM users WHERE name=$1', [name]);
+if (!isNonEmptyString(name, 80) || !isNonEmptyString(password, 200)) {
+  return res.status(400).json({ error: 'Név és jelszó kötelező' });
+}
+const q = await pool.query('SELECT * FROM users WHERE name=$1', [name.trim()]);
 if (!q.rows[0]) return res.status(401).json({ error: 'Hibás belépés' });
 const user = q.rows[0];
 const ok = await bcrypt.compare(password || '', user.pin_hash);
 if (!ok) return res.status(401).json({ error: 'Hibás belépés' });
 const token = jwt.sign({ id: user.id, role: user.role, name: user.name }, process.env.JWT_SECRET, { expiresIn: '7d' });
 res.json({ token, user: { id: user.id, name: user.name, role: user.role, full_name: user.full_name, birth_date: user.birth_date } });
+});
+
+app.post('/api/auth/password-reset-request', authLimiter, async (req, res) => {
+const { name, note } = req.body || {};
+if (!isNonEmptyString(name, 80)) {
+  return res.status(400).json({ error: 'Név kötelező' });
+}
+const safeNote = isNonEmptyString(note, 500) ? note.trim() : null;
+await pool.query(
+  'INSERT INTO password_reset_requests(user_name, note, status) VALUES ($1,$2,$3)',
+  [name.trim(), safeNote, 'requested']
+);
+res.json({ ok: true, message: 'Jelszó-visszaállítási kérés rögzítve. Az admin hamarosan segít.' });
 });
 
 app.get('/api/meta/symptoms', authRequired, async (req,res)=>{
@@ -148,6 +187,12 @@ res.json({ items: q.rows });
 });
 
 app.get('/api/stats/summary', authRequired, async (req,res)=>{
+const { from, to } = req.query;
+const vals = [req.user.id];
+let where = 'WHERE user_id=$1';
+if (from) { vals.push(from); where += ` AND measured_at::date >= $${vals.length}::date`; }
+if (to) { vals.push(to); where += ` AND measured_at::date <= $${vals.length}::date`; }
+
 const q = await pool.query(`
 SELECT
 COUNT(*)::int AS total,
@@ -157,7 +202,7 @@ MIN(systolic)::int AS min_sys,
 MAX(systolic)::int AS max_sys,
 MIN(diastolic)::int AS min_dia,
 MAX(diastolic)::int AS max_dia
-FROM measurements WHERE user_id=$1`, [req.user.id]);
+FROM measurements ${where}`, vals);
 
 const trendQ = await pool.query(`
 WITH w AS (
@@ -207,7 +252,18 @@ app.get('/api/export.csv', authRequired, async (req,res)=>{
     egyeni_tunet: r.symptoms_text || '',
   }));
 
-  const csv = stringify(rows, { header: true });
+  const csvColumns = [
+    'teljes_nev',
+    'szuletesi_datum',
+    'meresi_nap',
+    'idopont',
+    'vernyomas',
+    'pulzus',
+    'napszak',
+    'alap_tunetek',
+    'egyeni_tunet',
+  ];
+  const csv = stringify(rows, { header: true, columns: csvColumns });
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="vernyomas-export.csv"');
   res.send(csv);
@@ -399,6 +455,9 @@ res.json({ item: q.rows[0] });
 
 app.post('/api/admin/report-request/:userId', authRequired, adminOnly, async (req,res)=>{
 const targetUserId = Number(req.params.userId);
+if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+  return res.status(400).json({ error: 'Hibás userId' });
+}
 const q = await pool.query(`INSERT INTO report_requests(target_user_id, requested_by_admin_id, status) VALUES($1,$2,'requested') RETURNING *`, [targetUserId, req.user.id]);
 res.json({ item: q.rows[0] });
 });
@@ -425,9 +484,54 @@ SELECT
 (SELECT COUNT(*)::int FROM users WHERE role='user') AS total_users,
 (SELECT COUNT(*)::int FROM users u WHERE NOT EXISTS (
 SELECT 1 FROM measurements m WHERE m.user_id=u.id AND m.measured_at >= now()-interval '14 day'
-) AND u.role='user') AS inactive_users
+) AND u.role='user') AS inactive_users,
+(SELECT COUNT(*)::int FROM password_reset_requests WHERE status='requested') AS pending_password_resets
 `);
 res.json(q.rows[0]);
+});
+
+app.get('/api/admin/password-reset-requests', authRequired, adminOnly, async (req,res)=>{
+const q = await pool.query(`
+SELECT id, user_name, note, status, created_at
+FROM password_reset_requests
+ORDER BY created_at DESC, id DESC
+LIMIT 200`);
+res.json({ items: q.rows });
+});
+
+app.post('/api/admin/password-reset-requests/:id/status', authRequired, adminOnly, async (req,res)=>{
+const requestId = Number(req.params.id);
+const status = String(req.body?.status || '').trim();
+if (!Number.isInteger(requestId) || requestId <= 0) {
+  return res.status(400).json({ error: 'Hibás kérés azonosító' });
+}
+if (!['requested', 'in_progress', 'completed', 'rejected'].includes(status)) {
+  return res.status(400).json({ error: 'Hibás státusz' });
+}
+const q = await pool.query(
+  'UPDATE password_reset_requests SET status=$1 WHERE id=$2 RETURNING *',
+  [status, requestId]
+);
+if (!q.rows[0]) return res.status(404).json({ error: 'Kérés nem található' });
+res.json({ item: q.rows[0] });
+});
+
+app.post('/api/admin/users/:userId/set-password', authRequired, adminOnly, async (req,res)=>{
+const targetUserId = Number(req.params.userId);
+const newPassword = String(req.body?.password || '');
+if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+  return res.status(400).json({ error: 'Hibás userId' });
+}
+if (!isNonEmptyString(newPassword, 200) || newPassword.length < 6) {
+  return res.status(400).json({ error: 'A jelszó legalább 6 karakter legyen' });
+}
+const pinHash = await bcrypt.hash(newPassword, 10);
+const q = await pool.query(
+  'UPDATE users SET pin_hash=$1 WHERE id=$2 RETURNING id,name,role',
+  [pinHash, targetUserId]
+);
+if (!q.rows[0]) return res.status(404).json({ error: 'Felhasználó nem található' });
+res.json({ ok: true, user: q.rows[0], message: 'Jelszó frissítve' });
 });
 
 const port = process.env.PORT || 4000;

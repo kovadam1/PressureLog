@@ -22,6 +22,9 @@ export default function App() {
   const [reg, setReg] = useState({ name: "", password: "" });
   const [authMode, setAuthMode] = useState("login"); // login | register
   const [authError, setAuthError] = useState("");
+  const [showReset, setShowReset] = useState(false);
+  const [resetReq, setResetReq] = useState({ name: "", note: "" });
+  const [resetMsg, setResetMsg] = useState("");
   const [m, setM] = useState({ systolic: "120", diastolic: "80", pulse: "72", measured_time: "", daytime: "reggel", context: "ülve", symptoms_text: "", symptoms: [] });
   const [symptomsCatalog, setSymptomsCatalog] = useState([]);
   const [profile, setProfile] = useState({ full_name: "", birth_date: "" });
@@ -40,6 +43,9 @@ export default function App() {
   const [adminStats, setAdminStats] = useState(null);
   const [adminLoading, setAdminLoading] = useState(false);
   const [reportUserId, setReportUserId] = useState("");
+  const [resetRequests, setResetRequests] = useState([]);
+  const [passwordResetTargetUserId, setPasswordResetTargetUserId] = useState("");
+  const [passwordResetNewPassword, setPasswordResetNewPassword] = useState("");
 
   const loadData = async () => {
     const [ms, ss, meds, syms, prof] = await Promise.all([
@@ -63,12 +69,14 @@ export default function App() {
     if (auth?.role !== "admin") return;
     setAdminLoading(true);
     try {
-      const [usersRes, statsRes] = await Promise.all([
+      const [usersRes, statsRes, resetRes] = await Promise.all([
         api.get("/api/admin/users"),
         api.get("/api/admin/system-stats"),
+        api.get("/api/admin/password-reset-requests"),
       ]);
       setAdminUsers(usersRes.data.items || []);
       setAdminStats(statsRes.data || null);
+      setResetRequests(resetRes.data.items || []);
     } finally {
       setAdminLoading(false);
     }
@@ -102,6 +110,19 @@ export default function App() {
       setReg({ name: "", password: "" });
     } catch (e) {
       setAuthError(e?.response?.data?.error || "Sikertelen regisztráció");
+    }
+  };
+
+  const submitPasswordResetRequest = async () => {
+    try {
+      setAuthError("");
+      setResetMsg("");
+      const { data } = await api.post("/api/auth/password-reset-request", resetReq);
+      setResetMsg(data?.message || "A kérés rögzítve.");
+      setResetReq({ name: "", note: "" });
+      setShowReset(false);
+    } catch (e) {
+      setAuthError(e?.response?.data?.error || "Nem sikerült a jelszó-visszaállítási kérés.");
     }
   };
 
@@ -147,6 +168,26 @@ export default function App() {
     alert('Riportkérés elküldve');
     setReportUserId('');
     await loadAdminData();
+  };
+
+  const updateResetRequestStatus = async (id, status) => {
+    await api.post(`/api/admin/password-reset-requests/${id}/status`, { status });
+    await loadAdminData();
+  };
+
+  const adminSetUserPassword = async () => {
+    const uid = Number(passwordResetTargetUserId);
+    if (!Number.isInteger(uid) || uid <= 0) {
+      alert('Adj meg érvényes User ID-t');
+      return;
+    }
+    if (!passwordResetNewPassword || passwordResetNewPassword.length < 6) {
+      alert('A jelszó legalább 6 karakter legyen');
+      return;
+    }
+    await api.post(`/api/admin/users/${uid}/set-password`, { password: passwordResetNewPassword });
+    alert('Jelszó frissítve');
+    setPasswordResetNewPassword('');
   };
 
   const download = async (url, filename) => {
@@ -199,19 +240,42 @@ export default function App() {
           {authMode === "login" ? (
             <>
               <h2 className="text-xl font-bold mb-3 text-slate-900">Belépés</h2>
-              <input className="w-full mb-2 p-2 rounded border border-slate-300 bg-slate-50 text-slate-900 placeholder:text-slate-500" placeholder="Név" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} />
-              <input className="w-full mb-3 p-2 rounded border border-slate-300 bg-slate-50 text-slate-900 placeholder:text-slate-500" placeholder="Jelszó" type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} />
-              {authError && <p className="text-sm text-red-600 mb-2">{authError}</p>}
-              <button className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold" onClick={login}>Belépés</button>
+              <form onSubmit={(e)=>{e.preventDefault(); login();}}>
+                <input className="w-full mb-2 p-2 rounded border border-slate-300 bg-slate-50 text-slate-900 placeholder:text-slate-500" placeholder="Név" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} />
+                <input className="w-full mb-3 p-2 rounded border border-slate-300 bg-slate-50 text-slate-900 placeholder:text-slate-500" placeholder="Jelszó" type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} />
+                {authError && <p className="text-sm text-red-600 mb-2">{authError}</p>}
+                {resetMsg && <p className="text-sm text-emerald-700 mb-2">{resetMsg}</p>}
+                <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold">Belépés</button>
+              </form>
+
               <button className="w-full mt-3 border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg font-medium" onClick={()=>{setAuthError(""); setAuthMode("register");}}>Regisztráció</button>
+
+              <button
+                className="w-full mt-2 text-sm text-indigo-700 hover:text-indigo-800 underline"
+                onClick={() => { setAuthError(""); setResetMsg(""); setShowReset((v)=>!v); setResetReq({ ...resetReq, name: form.name || resetReq.name }); }}
+                type="button"
+              >
+                Elfelejtett jelszó? Jelszó-visszaállítás kérése
+              </button>
+
+              {showReset && (
+                <form className="mt-3 p-3 rounded-lg border border-slate-200 bg-slate-50" onSubmit={(e)=>{e.preventDefault(); submitPasswordResetRequest();}}>
+                  <p className="text-sm font-medium mb-2">Jelszó-visszaállítási kérés</p>
+                  <input className="w-full mb-2 p-2 rounded border border-slate-300 bg-white" placeholder="Felhasználónév" value={resetReq.name} onChange={(e)=>setResetReq({...resetReq, name:e.target.value})} />
+                  <textarea className="w-full mb-2 p-2 rounded border border-slate-300 bg-white" placeholder="Megjegyzés (opcionális)" value={resetReq.note} onChange={(e)=>setResetReq({...resetReq, note:e.target.value})} />
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold">Kérés elküldése</button>
+                </form>
+              )}
             </>
           ) : (
             <>
               <h2 className="text-xl font-bold mb-3 text-slate-900">Regisztráció</h2>
-              <input className="w-full mb-2 p-2 rounded border border-slate-300 bg-slate-50 text-slate-900 placeholder:text-slate-500" placeholder="Név" value={reg.name} onChange={e=>setReg({...reg,name:e.target.value})} />
-              <input className="w-full mb-2 p-2 rounded border border-slate-300 bg-slate-50 text-slate-900 placeholder:text-slate-500" placeholder="Jelszó (minimum 6 karakter)" type="password" value={reg.password} onChange={e=>setReg({...reg,password:e.target.value})} />
-              {authError && <p className="text-sm text-red-600 mb-2">{authError}</p>}
-              <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold" onClick={register}>Regisztráció mentése</button>
+              <form onSubmit={(e)=>{e.preventDefault(); register();}}>
+                <input className="w-full mb-2 p-2 rounded border border-slate-300 bg-slate-50 text-slate-900 placeholder:text-slate-500" placeholder="Név" value={reg.name} onChange={e=>setReg({...reg,name:e.target.value})} />
+                <input className="w-full mb-2 p-2 rounded border border-slate-300 bg-slate-50 text-slate-900 placeholder:text-slate-500" placeholder="Jelszó (minimum 6 karakter)" type="password" value={reg.password} onChange={e=>setReg({...reg,password:e.target.value})} />
+                {authError && <p className="text-sm text-red-600 mb-2">{authError}</p>}
+                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold">Regisztráció mentése</button>
+              </form>
               <button className="w-full mt-3 border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg font-medium" onClick={()=>{setAuthError(""); setAuthMode("login");}}>Vissza a belépéshez</button>
             </>
           )}
@@ -403,6 +467,10 @@ export default function App() {
                     <p className="text-xs text-slate-500">Inaktív (14 nap)</p>
                     <p className="text-lg font-bold">{adminStats?.inactive_users ?? '--'}</p>
                   </div>
+                  <div className="rounded-lg border border-slate-200 p-2 bg-slate-50">
+                    <p className="text-xs text-slate-500">Nyitott reset kérelmek</p>
+                    <p className="text-lg font-bold">{adminStats?.pending_password_resets ?? '--'}</p>
+                  </div>
                 </div>
               )}
             </div>
@@ -412,6 +480,49 @@ export default function App() {
               <div className="flex gap-2">
                 <input className="flex-1 p-2 rounded bg-slate-100" placeholder="User ID (pl. 2)" value={reportUserId} onChange={e=>setReportUserId(e.target.value)} />
                 <button className="bg-indigo-600 text-white rounded-lg px-3" onClick={createReportRequest}>Küldés</button>
+              </div>
+            </div>
+
+            <div className={`${card} p-3`}>
+              <p className="font-semibold mb-2">Jelszó beállítás felhasználónak</p>
+              <p className="text-xs text-slate-500 mb-2">Adj meg egy User ID-t és új jelszót (min. 6 karakter).</p>
+              <div className="grid grid-cols-1 gap-2">
+                <input
+                  className="p-2 rounded bg-slate-100"
+                  placeholder="User ID (pl. 2)"
+                  value={passwordResetTargetUserId}
+                  onChange={(e)=>setPasswordResetTargetUserId(e.target.value)}
+                />
+                <input
+                  className="p-2 rounded bg-slate-100"
+                  type="password"
+                  placeholder="Új jelszó"
+                  value={passwordResetNewPassword}
+                  onChange={(e)=>setPasswordResetNewPassword(e.target.value)}
+                />
+                <button className="bg-emerald-600 text-white rounded-lg px-3 py-2" onClick={adminSetUserPassword}>Jelszó beállítása</button>
+              </div>
+            </div>
+
+            <div className={`${card} p-3`}>
+              <p className="font-semibold mb-2">Jelszó-visszaállítási kérelmek</p>
+              <div className="space-y-2">
+                {resetRequests.map((r) => (
+                  <div key={r.id} className="rounded-lg border border-slate-200 p-2 bg-slate-50 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold">#{r.id} • {r.user_name}</span>
+                      <span className="text-xs text-slate-600">{new Date(r.created_at).toLocaleString('hu-HU')}</span>
+                    </div>
+                    <p className="text-xs text-slate-600 mt-1">Státusz: <span className="font-medium">{r.status}</span></p>
+                    {r.note && <p className="text-xs text-slate-600 mt-1">Megjegyzés: {r.note}</p>}
+                    <div className="mt-2 flex gap-2">
+                      <button className="text-xs border border-amber-300 rounded px-2 py-1" onClick={() => updateResetRequestStatus(r.id, 'in_progress')}>Folyamatban</button>
+                      <button className="text-xs border border-emerald-300 rounded px-2 py-1" onClick={() => updateResetRequestStatus(r.id, 'completed')}>Kész</button>
+                      <button className="text-xs border border-rose-300 rounded px-2 py-1" onClick={() => updateResetRequestStatus(r.id, 'rejected')}>Elutasít</button>
+                    </div>
+                  </div>
+                ))}
+                {!resetRequests.length && <p className="text-sm text-slate-500">Nincs reset kérés.</p>}
               </div>
             </div>
 
